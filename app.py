@@ -1,101 +1,53 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import os
-import re
+import copy
 import gc
 import glob
-import copy
 import json
-import argparse
+import os
+import re
+from pathlib import Path
 
+import click
 import cv2 as cv
 import numpy as np
 from PIL import Image
 
-import core.gui as gui
 import core.util as util
+from core.gui import AppGui
 
 image_list, mask_list, debug_image_list = [], [], []
 bgd_model_list, fgd_model_list = [], []
 prev_class_id = -1
 
 
-def get_args():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--input",
-        type=str,
-        default='input',
-    )
-    parser.add_argument(
-        "--output_image",
-        type=str,
-        default='output/image',
-    )
-    parser.add_argument(
-        "--output_annotation",
-        type=str,
-        default='output/annotation',
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default='config.json',
-    )
-
-    args = parser.parse_args()
-
-    return args
-
-
-def initialize_grabcut_list(class_num, image, mask):
+def initialize_grabcut_list(image, mask):
     global image_list, mask_list, bgd_model_list, fgd_model_list, \
-            debug_image_list
+        debug_image_list
 
-    if len(image_list) == 0:
-        for index in range(class_num):
-            image_list.append(copy.deepcopy(image))
-            debug_image_list.append(copy.deepcopy(image))
-            mask_list.append(copy.deepcopy(mask))
-            bgd_model_list.append(np.zeros((1, 65), dtype=np.float64))
-            fgd_model_list.append(np.zeros((1, 65), dtype=np.float64))
-    else:
-        for index in range(class_num):
-            image_list[index] = copy.deepcopy(image)
-            debug_image_list[index] = copy.deepcopy(image)
-            mask_list[index] = copy.deepcopy(mask)
-            bgd_model_list[index] = np.zeros((1, 65), dtype=np.float64)
-            fgd_model_list[index] = np.zeros((1, 65), dtype=np.float64)
-
+    image_list = copy.deepcopy(image)
+    debug_image_list = copy.deepcopy(image)
+    mask_list = copy.deepcopy(mask)
+    bgd_model_list = np.zeros((1, 65), dtype=np.float64)
+    fgd_model_list = np.zeros((1, 65), dtype=np.float64)
     gc.collect()
 
 
-# 既存のマスクファイルを読み込む
-def load_mask_image(output_annotation_path, mask_filename, class_num):
-    global mask_list
-
+def load_mask_image(output_annotation_path, mask_filename):
     filename = os.path.splitext(os.path.basename(mask_filename))[0]
-    mask_file_path = os.path.join(output_annotation_path, filename + '.png')
+    mask_file_path = os.path.join(output_annotation_path, filename + '_mask.png')
     if os.path.exists(mask_file_path):
         pil_image = Image.open(mask_file_path)
         mask = np.asarray(pil_image).astype('uint8')
-
-        for index in range(class_num):
-            mask_list[index] = np.where((mask == index), 1, 0).astype('uint8')
-
-    return mask_list
+        return mask
 
 
-# ROI Mode描画
 def draw_roi_mode_image(image, roi=None):
     debug_image = copy.deepcopy(image)
-
     cv.putText(debug_image, "Select ROI", (5, 25), cv.FONT_HERSHEY_SIMPLEX,
                0.9, (255, 255, 255), 3, cv.LINE_AA)
     cv.putText(debug_image, "Select ROI", (5, 25), cv.FONT_HERSHEY_SIMPLEX,
                0.9, (103, 82, 51), 1, cv.LINE_AA)
-
     if roi is not None:
         cv.rectangle(
             debug_image,
@@ -111,19 +63,18 @@ def draw_roi_mode_image(image, roi=None):
             (103, 82, 51),
             thickness=2,
         )
-
     return debug_image
 
 
-# GrabCut Mode描画
+# Draw overlay mask in grabcut mode
 def draw_grabcut_mode_image(
-    image,
-    color,
-    mask,
-    mask_color,
-    point01=None,
-    point02=None,
-    thickness=4,
+        image,
+        color,
+        mask,
+        mask_color,
+        point01=None,
+        point02=None,
+        thickness=4,
 ):
     debug_image = copy.deepcopy(image)
     debug_mask = copy.deepcopy(mask)
@@ -135,11 +86,10 @@ def draw_grabcut_mode_image(
     return debug_image, debug_mask
 
 
-# 処理中表示
 def draw_processing_image(image):
     image_width, image_height = image.shape[1], image.shape[0]
 
-    # 処理中表示
+    # Processing wait display image
     loading_image = copy.deepcopy(image)
     loading_mask = np.zeros(image.shape[:2], dtype=np.uint8)
     loading_image = loading_image * loading_mask[:, :, np.newaxis]
@@ -180,24 +130,22 @@ def get_mouse_start_end_point(appgui, mosue_info):
     return (mouse_event, mouse_start_point, mouse_end_point, mouse_prev_point)
 
 
-# ROIモード時の処理
+# Select ROI MODE
 def process_select_roi_mode(
-    appgui,
-    mosue_info,
-    image,
-    debug_image,
-    mask,
-    bgd_model,
-    fgd_model,
+        appgui,
+        mosue_info,
+        image,
+        debug_image,
+        mask,
+        bgd_model,
+        fgd_model,
 ):
-    global mask_list
-
-    # マウス情報取得
+    # Get mouse info
     mouse_event = mosue_info[0]
     mouse_start_point = mosue_info[1]
     mouse_end_point = mosue_info[2]
 
-    # GUI上の設定を取得
+    # Get GUI info
     mask_alpha = appgui.get_setting_mask_alpha()
     mask_beta = 1 - mask_alpha
     iteration = appgui.get_setting_iteration()
@@ -205,38 +153,38 @@ def process_select_roi_mode(
     roi = None
     grabcut_execute = False
 
-    # ROI取得
-    if (mouse_start_point is not None and mouse_end_point is not None):
+    # Get ROI
+    if mouse_start_point is not None and mouse_end_point is not None:
         min_x = (mouse_start_point[0]) if (
-            mouse_start_point[0] < mouse_end_point[0]) else (
-                mouse_end_point[0])
+                mouse_start_point[0] < mouse_end_point[0]) else (
+            mouse_end_point[0])
         man_x = (mouse_start_point[0]) if (
-            mouse_start_point[0] > mouse_end_point[0]) else (
-                mouse_end_point[0])
+                mouse_start_point[0] > mouse_end_point[0]) else (
+            mouse_end_point[0])
         min_y = (mouse_start_point[1]) if (
-            mouse_start_point[1] < mouse_end_point[1]) else (
-                mouse_end_point[1])
+                mouse_start_point[1] < mouse_end_point[1]) else (
+            mouse_end_point[1])
         man_y = (mouse_start_point[1]) if (
-            mouse_start_point[1] > mouse_end_point[1]) else (
-                mouse_end_point[1])
+                mouse_start_point[1] > mouse_end_point[1]) else (
+            mouse_end_point[1])
         roi = [min_x, min_y, man_x, man_y]
 
-    # マウスドラッグ開始時
+    # Draw roi mode
     if mouse_event == appgui.MOUSE_EVENT_DRAG:
         debug_image = draw_roi_mode_image(image)
 
-    # マウスドラッグ中の場合、ROI領域を描画
+    # Draw roi
     if mouse_event == appgui.MOUSE_EVENT_DRAG:
         debug_image = draw_roi_mode_image(image, roi)
 
-    # マウスドラッグ終了時にGrabCutを実施
+    # Get ROI and process
     if mouse_event == appgui.MOUSE_EVENT_DRAG_END:
-        # 処理中表示
+        # Show wait process image
         loading_image = draw_processing_image(image)
         appgui.draw_image(loading_image)
         appgui.read_window(timeout=100)
 
-        # GrabCut実施
+        # execute GrabCut
         mask, bgd_model, fgd_model, debug_image = util.execute_grabcut(
             image,
             mask,
@@ -248,63 +196,59 @@ def process_select_roi_mode(
             roi,
         )
 
-        # 前景/後景の手修正するモード(GRABCUT_MODE)へ遷移
+        # Set GrabCut mode
         appgui.mode = appgui.GRABCUT_MODE
 
-        # 前景/背景情報提示
-        label_background = appgui.get_setting_lable_background()
+        # Set Drawing color
+        label_background = appgui.get_setting_label_background()
         if label_background:
-            color = (0, 0, 255)
+            color = (0, 0, 0)
         else:
-            color = (255, 0, 0)
+            color = (255, 255, 255)
         cv.rectangle(debug_image, (0, 0), (511, 511), color=color, thickness=3)
-
         grabcut_execute = True
 
-    # 画像描画
+    # Draw step results
     appgui.draw_image(debug_image)
-    appgui.draw_mask_image(mask_list)
+    appgui.draw_mask_image(mask)
 
     return grabcut_execute, mask, bgd_model, fgd_model, debug_image
 
 
-# GrabCutモード時の処理
+# GrabCut MODE
 def process_grabcut_mode(
-    appgui,
-    mosue_info,
-    image,
-    debug_image,
-    mask,
-    bgd_model,
-    fgd_model,
+        appgui,
+        mosue_info,
+        image,
+        debug_image,
+        mask,
+        bgd_model,
+        fgd_model,
 ):
-    global mask_list
-
-    # マウス情報取得
+    # Get mouse info
     mouse_event = mosue_info[0]
     mouse_end_point = mosue_info[2]
     mouse_prev_point = mosue_info[3]
 
-    # GUI上の設定を取得
+    # Get GUI info
     mask_alpha = appgui.get_setting_mask_alpha()
     mask_beta = 1 - mask_alpha
     iteration = appgui.get_setting_iteration()
     thickness = appgui.get_setting_draw_thickness()
-    label_background = appgui.get_setting_lable_background()
+    label_background = appgui.get_setting_label_background()
 
     grabcut_execute = False
 
     if label_background:
-        color = (0, 0, 255)
+        color = (0, 0, 0)
         manually_label_value = 0
     else:
-        color = (255, 0, 0)
+        color = (255, 255, 255)
         manually_label_value = 1
 
-    # マウスドラッグ中の場合、手修正指定を描画
+    # Draw mask manually in grabcut mode
     if mouse_event == appgui.MOUSE_EVENT_DRAG_START or \
             mouse_event == appgui.MOUSE_EVENT_DRAG:
-
         debug_image, mask = draw_grabcut_mode_image(
             debug_image,
             color,
@@ -315,14 +259,14 @@ def process_grabcut_mode(
             thickness=thickness,
         )
 
-    # マウスドラッグ終了時にGrabCutを実施
+    # Update image
     if mouse_event == appgui.MOUSE_EVENT_DRAG_END:
-        # 処理中表示
+        # Show wait processing image
         loading_image = draw_processing_image(image)
         appgui.draw_image(loading_image)
         appgui.read_window(timeout=100)
 
-        # GrabCut実施
+        # execute GrabCut
         mask, bgd_model, fgd_model, debug_image = util.execute_grabcut(
             image,
             mask,
@@ -332,56 +276,31 @@ def process_grabcut_mode(
             mask_alpha,
             mask_beta,
         )
-
-        # 前景/背景情報提示
         cv.rectangle(debug_image, (0, 0), (511, 511), color=color, thickness=3)
-
         grabcut_execute = True
 
-    # 画像描画
+    # Draw step results
     appgui.draw_image(debug_image)
-    appgui.draw_mask_image(mask_list)
+    appgui.draw_mask_image(mask)
 
     return grabcut_execute, mask, bgd_model, fgd_model, debug_image
 
 
-# イベント種別取得
 def get_event_kind(event):
-    event_kind = None
-
     if event.startswith('Up') or event.startswith('p'):
         event_kind = 'Up'
     elif event.startswith('Down') or event.startswith('n'):
         event_kind = 'Down'
-    elif event.startswith('0'):
-        event_kind = '-00-'
-    elif event.startswith('1'):
-        event_kind = '-01-'
-    elif event.startswith('2'):
-        event_kind = '-02-'
-    elif event.startswith('3'):
-        event_kind = '-03-'
-    elif event.startswith('4'):
-        event_kind = '-04-'
-    elif event.startswith('5'):
-        event_kind = '-05-'
-    elif event.startswith('6'):
-        event_kind = '-06-'
-    elif event.startswith('7'):
-        event_kind = '-07-'
-    elif event.startswith('8'):
-        event_kind = '-08-'
-    elif event.startswith('9'):
-        event_kind = '-09-'
     elif event.startswith('s'):
         event_kind = 's'
     elif event.startswith('Control'):
         event_kind = 'Control'
     elif event.startswith('Escape'):
         event_kind = 'Escape'
+    elif event.startswith('-CLASS ID-'):
+        event_kind = 'Class ID'
     else:
         event_kind = event
-
     return event_kind
 
 
@@ -407,18 +326,16 @@ def event_handler_file_select(event_kind, appgui, scroll_count=0):
     mask = np.zeros(resize_image.shape[:2], dtype=np.uint8)
 
     # 初期描画
-    class_num = 22
-    initialize_grabcut_list(class_num, resize_image, mask)
+    initialize_grabcut_list(resize_image, mask)
 
     # 既存のマスクファイルを確認し、存在すれば読み込む
-    mask_list = load_mask_image(output_annotation_path, file_path, class_num)
+    mask_list = load_mask_image(output_annotation_path, file_path)
 
     debug_image = draw_roi_mode_image(resize_image)
     appgui.draw_image(debug_image)
     appgui.draw_mask_image(mask_list)
 
     # 設定リセット
-    appgui.set_setting_class_id(1)
     appgui.set_setting_lable_background(True)
 
     # ROI選択モード(ROI_MODE)に遷移
@@ -435,78 +352,42 @@ def event_handler_file_select_down(event_kind, appgui):
     event_handler_file_select(event_kind, appgui, scroll_count=1)
 
 
-# イベントハンドラー：クラスID選択
-def event_handler_select_class_id(event_kind, appgui):
-    global prev_class_id, image_list, mask_list, debug_image_list
-
-    class_id = int(event_kind.replace('-', ''))
-    appgui.set_setting_class_id(class_id)
-
-    # クラスID選択変更時
-    if prev_class_id != class_id:
-        # 描画更新
-        debug_image = draw_roi_mode_image(image_list[class_id])
-        debug_image_list[class_id] = debug_image
-
-        appgui.draw_image(debug_image_list[class_id])
-        appgui.draw_mask_image(mask_list)
-        appgui.read_window(timeout=1)
-
-        prev_class_id = class_id
-
-        # 設定リセット
-        appgui.set_setting_lable_background(True)
-
-        # ROI選択モード(ROI_MODE)に遷移
-        appgui.mode = appgui.ROI_MODE
-
-
 # イベントハンドラー：前景/後景指定選択
 def event_handler_change_manually_label(event_kind, appgui):
     global debug_image_list
 
-    label_background = not appgui.get_setting_lable_background()
+    label_background = not appgui.get_setting_label_background()
     appgui.set_setting_lable_background(label_background)
-    label_background = appgui.get_setting_lable_background()
+    label_background = appgui.get_setting_label_background()
 
     # 前景/背景情報提示
     if appgui.mode == appgui.GRABCUT_MODE:
         class_id = appgui.get_setting_class_id()
-        label_background = appgui.get_setting_lable_background()
+        label_background = appgui.get_setting_label_background()
         if label_background:
             color = (0, 0, 255)
         else:
             color = (255, 0, 0)
-        cv.rectangle(debug_image_list[class_id], (0, 0), (511, 511),
+        cv.rectangle(debug_image_list, (0, 0), (511, 511),
                      color=color,
                      thickness=3)
 
-        appgui.draw_image(debug_image_list[class_id])
+        appgui.draw_image(debug_image_list)
 
 
-# イベントハンドラー：設定変更
+# Change config handler
 def event_handler_change_config(
-    event_kind,
-    appgui,
-    config_file_name='config.json',
+        event_kind,
+        appgui,
+        config_file_name='config.json',
 ):
     config_data = {
-        "MASK ALPHA": 0.7,
-        "ITERATION": 5,
-        "DRAW THICKNESS": 4,
-        "OUTPUT WIDTH": 512,
-        "OUTPUT HEIGHT": 512,
-        "AUTO SAVE": 1
+        'MASK ALPHA': appgui.get_setting_mask_alpha(),
+        'ITERATION': appgui.get_setting_iteration(),
+        'DRAW THICKNESS': appgui.get_setting_draw_thickness(),
+        'OUTPUT WIDTH': appgui.get_setting_output_width(),
+        'OUTPUT HEIGHT': appgui.get_setting_output_height()
     }
-
-    config_data['MASK ALPHA'] = appgui.get_setting_mask_alpha()
-
-    config_data['ITERATION'] = appgui.get_setting_iteration()
-
-    config_data['DRAW THICKNESS'] = appgui.get_setting_draw_thickness()
-
-    config_data['OUTPUT WIDTH'] = appgui.get_setting_output_width()
-    config_data['OUTPUT HEIGHT'] = appgui.get_setting_output_height()
 
     auto_save = appgui.get_setting_auto_save()
     if auto_save:
@@ -518,12 +399,12 @@ def event_handler_change_config(
         json.dump(config_data, file, ensure_ascii=False, indent=4)
 
 
-# イベントハンドラー：NOP
+# NOP
 def event_handler_change_nop(event_kind, appgui):
     pass
 
 
-# イベントハンドラーリスト取得
+# Event handlers
 def get_event_handler_list():
     event_handler = {
         '-IMAGE ORIGINAL-': event_handler_change_nop,
@@ -535,27 +416,7 @@ def get_event_handler_list():
         '-SPIN OUTPUT WIDTH-': event_handler_change_config,
         '-SPIN OUTPUT HEIGHT-': event_handler_change_config,
         '-CHECKBOX AUTO SAVE-': event_handler_change_config,
-        '-00-': event_handler_select_class_id,
-        '-01-': event_handler_select_class_id,
-        '-02-': event_handler_select_class_id,
-        '-03-': event_handler_select_class_id,
-        '-04-': event_handler_select_class_id,
-        '-05-': event_handler_select_class_id,
-        '-06-': event_handler_select_class_id,
-        '-07-': event_handler_select_class_id,
-        '-08-': event_handler_select_class_id,
-        '-09-': event_handler_select_class_id,
-        '-10-': event_handler_select_class_id,
-        '-11-': event_handler_select_class_id,
-        '-12-': event_handler_select_class_id,
-        '-13-': event_handler_select_class_id,
-        '-14-': event_handler_select_class_id,
-        '-15-': event_handler_select_class_id,
-        '-16-': event_handler_select_class_id,
-        '-17-': event_handler_select_class_id,
-        '-18-': event_handler_select_class_id,
-        '-19-': event_handler_select_class_id,
-        '-255-': event_handler_select_class_id,
+        '-CLASS ID-': event_handler_change_nop,
         'Up': event_handler_file_select_up,
         'Down': event_handler_file_select_down,
         's': event_handler_change_nop,
@@ -566,64 +427,69 @@ def get_event_handler_list():
     return event_handler
 
 
-def main():
+@click.command()
+@click.option("--image-input", "--input", "-i",
+              type=click.Path(exists=True, file_okay=False, writable=True, path_type=Path),
+              default='input', help='Path where to look for images.')
+@click.option("--image-output", "--io",
+              type=click.Path(exists=True, file_okay=False, writable=True, path_type=Path),
+              default='output/image', help='Path where images are stored.')
+@click.option("--annotation-output", "--ao",
+              type=click.Path(exists=True, file_okay=False, path_type=Path),
+              default='output/annotation', help='Path where masks are stored.')
+@click.option("--config", "-c",
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default='config.json', help='Path to app configuration.')
+def main(image_input: Path, image_output: Path, annotation_output: Path, config: Path):
     global image_list, mask_list, debug_image_list, bgd_model_list, \
-            fgd_model_list, output_annotation_path, prev_class_id
+        fgd_model_list, output_annotation_path, prev_class_id
 
-    # 引数解析 #################################################################
-    args = get_args()
+    input_path = os.path.join(str(image_input), '*')
+    output_image_path = str(image_output)
+    output_annotation_path = str(annotation_output)
+    config_file_name = str(config)
 
-    input_path = os.path.join(args.input, '*')
-    output_image_path = args.output_image
-    output_annotation_path = args.output_annotation
-    config_file_name = args.config
-
-    # 入力ファイルリスト作成 ####################################################
+    # Find eligible files
     file_paths = sorted([
         p for p in glob.glob(input_path)
         if re.search('/*\.(jpg|jpeg|png|gif|bmp)', str(p))
     ])
 
-    # GUI初期化 ################################################################
-    appgui = gui.AppGui(file_paths)
+    # Configure GUI
+    appgui = AppGui(file_paths)
     _ = appgui.load_config(config_file_name)
-
-    # 画像初期設定 ##############################################################
     grabcut_image_size = (512, 512)
 
-    # オリジナル画像
-    currrent_index = appgui.get_file_list_current_index()
-    image = cv.imread(file_paths[currrent_index])
+    # Initialize selected image
+    current_index = appgui.get_file_list_current_index()
+    image = cv.imread(file_paths[current_index])
     resize_image = cv.resize(image, grabcut_image_size)
-
     debug_image = draw_roi_mode_image(resize_image)
-
-    # マスク画像
     mask = np.zeros(resize_image.shape[:2], dtype=np.uint8)
+    bgd_model = np.zeros((1, 65), dtype=np.float64)
+    fgd_model = np.zeros((1, 65), dtype=np.float64)
 
-    # GrubCut用変数初期化 ######################################################
-    class_num = 22
-    initialize_grabcut_list(class_num, resize_image, mask)
+    # Load mask if present
+    existing_mask = load_mask_image(output_annotation_path,
+                                    file_paths[current_index])
+    if existing_mask is not None:
+        mask = existing_mask
 
-    # 既存のマスクファイルを確認し、存在すれば読み込む
-    mask_list = load_mask_image(output_annotation_path,
-                                file_paths[currrent_index], class_num)
-
-    # 画面初期描画
+    # Draw
     appgui.draw_image(debug_image)
-    appgui.draw_mask_image(mask_list)
+    appgui.draw_mask_image(mask)
 
-    # マウス座標 ###############################################################
+    # Initialize mouse event variables
     mouse_event = None
     mouse_start_point, mouse_end_point, mouse_prev_point = None, None, None
-    mosue_info = [
+    mouse_info = [
         mouse_event,
         mouse_start_point,
         mouse_end_point,
         mouse_prev_point,
     ]
 
-    # 動作モード ###############################################################
+    # Set ROI MODE
     appgui.mode = appgui.ROI_MODE
 
     process_func = [
@@ -631,10 +497,10 @@ def main():
         process_grabcut_mode,  # GRABCUT_MODE
     ]
 
-    # クラスID
+    # Get Class ID
     prev_class_id = appgui.get_setting_class_id()
 
-    # イベントハンドラーリスト ##################################################
+    # Get event handlers
     event_handler_list = get_event_handler_list()
 
     while True:
@@ -644,65 +510,66 @@ def main():
         output_width = appgui.get_setting_output_width()
         output_height = appgui.get_setting_output_height()
 
-        # マウス座標
-        mosue_info = get_mouse_start_end_point(
+        # Get mouse info
+        mouse_info = get_mouse_start_end_point(
             appgui,
-            mosue_info,
+            mouse_info,
         )
 
-        # モードに応じたGrabCut処理
+        # Process based on active mode
         grabcut_exec, mask, bgd_model, fgd_model, debug_image = process_func[
             appgui.mode](
-                appgui,
-                mosue_info,
-                image_list[class_id],
-                debug_image_list[class_id],
-                mask_list[class_id],
-                bgd_model_list[class_id],
-                fgd_model_list[class_id],
-            )
-        debug_image_list[class_id] = debug_image
-        mask_list[class_id] = mask
-        bgd_model_list[class_id] = bgd_model
-        fgd_model_list[class_id] = fgd_model
+            appgui,
+            mouse_info,
+            resize_image,
+            debug_image,
+            mask,
+            bgd_model,
+            fgd_model,
+        )
 
-        # GrubCut実行時
+        # GrubCut execution
         if grabcut_exec:
-            # リサイズ画像および、マスク画像保存
-            currrent_index = appgui.get_file_list_current_index()
-            file_path = appgui.get_file_path_from_listbox(currrent_index)
+            # Eventually save
+            current_index = appgui.get_file_list_current_index()
+            file_path = appgui.get_file_path_from_listbox(current_index)
             if auto_save:
                 util.save_image_and_mask(
                     output_image_path,
-                    image_list[class_id],
+                    image,
                     output_annotation_path,
-                    mask_list,
+                    mask,
                     file_path,
                     (output_width, output_height),
+                    class_id
                 )
 
-            # マウス状態初期化
-            mosue_info = [None, None, None, None]
+            # Reset mouse info
+            mouse_info = [None, None, None, None]
 
-        # イベント種別取得
+        # Get new event
         event_kind = get_event_kind(event)
-        # イベントに応じた処理を実行
+        # Handle event
         event_handler = event_handler_list.get(event_kind)
         if event_handler is not None:
             event_handler(event_kind, appgui)
 
-        # 保存
+        # Change class id
+        if event_kind == 'Class ID':
+            class_id = appgui.get_setting_class_id()
+
+        # Save
         if event_kind == 's':
-            # リサイズ画像および、マスク画像保存
             util.save_image_and_mask(
                 output_image_path,
-                image_list[class_id],
+                image,
                 output_annotation_path,
-                mask_list,
-                file_paths[currrent_index],
+                mask,
+                file_paths[current_index],
                 (output_width, output_height),
+                class_id
             )
-        # 終了
+        # Exit
         if event_kind == 'Escape':
             break
 

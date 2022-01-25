@@ -42,35 +42,9 @@ class AppGui(object):
         self._file_paths = file_paths
         file_list = [os.path.basename(file_path) for file_path in file_paths]
 
-        # クラスIDラジオボタン定義
-        radio_dict = {
-            '-00-': 0,
-            '-01-': 1,
-            '-02-': 2,
-            '-03-': 3,
-            '-04-': 4,
-            '-05-': 5,
-            '-06-': 6,
-            '-07-': 7,
-            '-08-': 8,
-            '-09-': 9,
-            '-10-': 10,
-            '-11-': 11,
-            '-12-': 12,
-            '-13-': 13,
-            '-14-': 14,
-            '-15-': 15,
-            '-16-': 16,
-            '-17-': 17,
-            '-18-': 18,
-            '-19-': 19,
-            '-255-': 255
-        }
-
-        # GUIテーマ設定
+        # Apply Theme
         sg.theme('DarkBlue')
 
-        # オリジナル画像/マスク画像表示フレーム
         frame_image = sg.Frame('',
                                layout=[[
                                    sg.Graph(
@@ -92,19 +66,15 @@ class AppGui(object):
                                ]],
                                border_width=0)
 
-        # クラスID選択フレーム
-        frame_class_select = sg.Frame('Class ID',
+        frame_class_select = sg.Frame('Class',
                                       layout=[[
-                                          sg.Radio(
-                                              item[1],
-                                              key=item[0],
-                                              group_id='0',
+                                          sg.InputText(
+                                              '0',
                                               enable_events=True,
-                                          ) for item in radio_dict.items()
-                                      ]],
+                                              key='-CLASS ID-'
+                                          )]],
                                       border_width=1)
 
-        # メイン(ファイルリスト以外)
         frame_main = sg.Frame(
             '',
             layout=[[frame_image], [frame_class_select],
@@ -179,31 +149,25 @@ class AppGui(object):
         # GUI初期設定
         self._file_currrent_index = 0
 
-        self._window['-01-'].update(True)  # クラスID：1
+        self._window['-CLASS ID-'].update(True)
         self._window.Element('-LISTBOX FILE-').Update(
-            set_to_index=self._file_currrent_index)  # ファイルリスト：先頭
-        self._window['-CHECKBOX BACKGROUND-'].Update(value=True)  # 前景後景指定
+            set_to_index=self._file_currrent_index)
+        self._window['-CHECKBOX BACKGROUND-'].Update(value=True)
 
         self._event = None
         self._values = None
 
         self._class_id = 0
 
-    # 廃止予定
     def legacy_get_window(self):
         return self._window
 
-    # PySimpleGUIイベント読み取り
     def read_window(self, timeout=None):
         self._event, self._values = self._window.read(timeout=timeout)
-
         if timeout is None:
-            # マウスイベント確認
             self._check_mouse_event(self._event, self._values)
-
         return self._event, self._values
 
-    # マウスイベント確認(window.read() Timeout指定無し時に使用する想定)
     def _check_mouse_event(self, event, values):
         if event == '-IMAGE ORIGINAL-':
             if self._mouse_drag_count == 0:
@@ -235,7 +199,6 @@ class AppGui(object):
                 self._mouse_event = self.MOUSE_EVENT_NONE
                 self._mouse_point = None
 
-    # マウスイベント読み取り
     def read_mouse_event(self):
         mouse_event = self._mouse_event
         mouse_point = self._mouse_point
@@ -246,13 +209,10 @@ class AppGui(object):
 
         return mouse_event, mouse_point
 
-    # 設定ファイル読み込み
     def load_config(self, config_file_name):
-        # JSON読み出し
         with open(config_file_name, mode='rt', encoding='utf-8') as file:
             config_data = json.load(file)
 
-        # 設定反映
         self._window['-SPIN MASK ALPHA-'].Update(
             value=config_data['MASK ALPHA'])
         self._window['-SPIN ITERATION-'].Update(value=config_data['ITERATION'])
@@ -266,10 +226,7 @@ class AppGui(object):
             self._window['-CHECKBOX AUTO SAVE-'].Update(value=True)
         else:
             self._window['-CHECKBOX AUTO SAVE-'].Update(value=False)
-
-        # GUI上の設定読み出し
         self._event, self._values = self._window.read(timeout=1)
-
         return config_data
 
     # GUIイベント取得
@@ -282,61 +239,7 @@ class AppGui(object):
 
     # 設定：クラスID
     def get_setting_class_id(self):
-        if self._values['-00-']:
-            self._class_id = 0
-        elif self._values['-01-']:
-            self._class_id = 1
-        elif self._values['-02-']:
-            self._class_id = 2
-        elif self._values['-03-']:
-            self._class_id = 3
-        elif self._values['-04-']:
-            self._class_id = 4
-        elif self._values['-05-']:
-            self._class_id = 5
-        elif self._values['-06-']:
-            self._class_id = 6
-        elif self._values['-07-']:
-            self._class_id = 7
-        elif self._values['-08-']:
-            self._class_id = 8
-        elif self._values['-09-']:
-            self._class_id = 9
-        elif self._values['-10-']:
-            self._class_id = 10
-        elif self._values['-11-']:
-            self._class_id = 11
-        elif self._values['-12-']:
-            self._class_id = 12
-        elif self._values['-13-']:
-            self._class_id = 13
-        elif self._values['-14-']:
-            self._class_id = 14
-        elif self._values['-15-']:
-            self._class_id = 15
-        elif self._values['-16-']:
-            self._class_id = 16
-        elif self._values['-17-']:
-            self._class_id = 17
-        elif self._values['-18-']:
-            self._class_id = 18
-        elif self._values['-19-']:
-            self._class_id = 19
-        elif self._values['-255-']:
-            self._class_id = 255
-        else:
-            self._class_id = 255
-
-        return self._class_id
-
-    # 設定：クラスID設定
-    def set_setting_class_id(self, class_id=255):
-        key_string = '-' + str(class_id).zfill(2) + '-'
-
-        self._window[key_string].update(True)
-        self._event, self._values = self._window.read(timeout=1)
-
-        return self._class_id
+        return self._values['-CLASS ID-']
 
     # 設定：GrabCut マスクα
     def get_setting_mask_alpha(self):
@@ -355,7 +258,7 @@ class AppGui(object):
         return self._values['-CHECKBOX AUTO SAVE-']
 
     # 設定：前景/後景指定
-    def get_setting_lable_background(self):
+    def get_setting_label_background(self):
         return self._values['-CHECKBOX BACKGROUND-']
 
     # 設定：前景/後景設定 設定
@@ -420,11 +323,10 @@ class AppGui(object):
         color_palette = color_palette.tolist()
 
         # 各クラスを統合した画像を生成
-        debug_mask = copy.deepcopy(mask_list[0])
-        for index, mask in enumerate(mask_list):
-            temp_mask = copy.deepcopy(mask)
-            debug_mask = np.where((temp_mask == 2) | (temp_mask == 0),
-                                  debug_mask, index).astype('uint8')
+        debug_mask = copy.deepcopy(mask_list)
+        temp_mask = copy.deepcopy(mask_list)
+        debug_mask = np.where((temp_mask == 2) | (temp_mask == 0),
+                              debug_mask, 0).astype('uint8')
 
         # バイト列へ変換
         with Image.fromarray(debug_mask, mode="P") as png_image:

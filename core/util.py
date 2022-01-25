@@ -9,31 +9,22 @@ from PIL import Image
 
 
 def execute_grabcut(
-    image,
-    mask,
-    bgd_model,
-    fgd_model,
-    iteration,
-    mask_alpha,
-    mask_beta,
-    roi=None,
+        image,
+        mask,
+        bgd_model,
+        fgd_model,
+        iteration,
+        mask_alpha,
+        mask_beta,
+        roi=None,
 ):
-    # GrabCut実施
-    if roi is not None:
-        mask, bgd_model, fgd_model = cv.grabCut(image, mask, roi, bgd_model,
-                                                fgd_model, iteration,
-                                                cv.GC_INIT_WITH_RECT)
-    else:
-        mask, bgd_model, fgd_model = cv.grabCut(image, mask, None, bgd_model,
-                                                fgd_model, iteration,
-                                                cv.GC_INIT_WITH_MASK)
+    mask, bgd_model, fgd_model = cv.grabCut(image, mask, roi, bgd_model,
+                                            fgd_model, iteration,
+                                            cv.GC_INIT_WITH_RECT if roi is not None else cv.GC_INIT_WITH_MASK)
 
-    # デバッグ用マスク重畳画像
-    mask2 = copy.deepcopy(mask)
-    mask2 = np.where((mask2 == 2) | (mask2 == 0), 0, 1).astype('uint8')
-    debug_image = image * mask2[:, :, np.newaxis]
+    mask = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
+    debug_image = image * mask[:, :, np.newaxis]
     debug_image = cv.addWeighted(debug_image, mask_alpha, image, mask_beta, 0)
-
     return mask, bgd_model, fgd_model, debug_image
 
 
@@ -48,52 +39,38 @@ def get_palette():
 
 
 def save_index_color_png(output_path, filename, mask_image):
-    # ファイル名(拡張子無し)取得
     base_filename = os.path.splitext(os.path.basename(filename))[0]
+    save_path = os.path.join(output_path, base_filename + '_mask.png')
 
-    # 保存先パス作成
-    save_path = os.path.join(output_path, base_filename + '.png')
-
-    # インデックスカラーモードで保存
     color_palette = get_palette().flatten()
     color_palette = color_palette.tolist()
     with Image.fromarray(mask_image, mode="P") as png_image:
-        png_image.putpalette(color_palette)
+        #png_image.putpalette(color_palette)
         png_image.save(save_path)
 
 
 def save_resize_image(output_path, filename, image):
-    # ファイル名(拡張子無し)取得
     base_filename = os.path.splitext(os.path.basename(filename))[0]
-
-    # 保存先パス作成
     save_path = os.path.join(output_path, base_filename + '.png')
-
     cv.imwrite(save_path, image)
 
 
 def save_image_and_mask(
-    output_image_path,
-    image,
-    output_annotation_path,
-    mask_list,
-    image_file_path,
-    output_size,
+        output_image_path,
+        image,
+        output_annotation_path,
+        mask,
+        image_file_path,
+        output_size,
+        class_id,
 ):
-    # セマンティックセグメンテーション カラーパレット取得
-    color_palette = get_palette().flatten()
-    color_palette = color_palette.tolist()
+    debug_mask = copy.deepcopy(mask)
+    temp_mask = copy.deepcopy(mask)
+    debug_mask = np.where((temp_mask == 2) | (temp_mask == 0), debug_mask, 0).astype('uint8')
 
-    # 各クラスを統合した画像を生成
-    debug_mask = copy.deepcopy(mask_list[0])
-    for index, mask in enumerate(mask_list):
-        temp_mask = copy.deepcopy(mask)
-        debug_mask = np.where((temp_mask == 2) | (temp_mask == 0), debug_mask,
-                              index).astype('uint8')
-
-    # リサイズ
     resize_image = cv.resize(image, output_size)
     resize_mask = cv.resize(debug_mask, output_size)
 
+    image_file_path = f'{image_file_path.split(".")[0]}_{class_id}.{image_file_path.split(".")[1]}'
     save_index_color_png(output_annotation_path, image_file_path, resize_mask)
     save_resize_image(output_image_path, image_file_path, resize_image)
