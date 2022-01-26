@@ -1,350 +1,118 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import io
-import os
-import copy
-import json
+from pathlib import Path
+from typing import List, Any, Tuple, Optional
 
-import cv2 as cv
-import numpy as np
-from PIL import Image
 import PySimpleGUI as sg
+import cv2
+import numpy as np
 
-import core.util as util
+from core.mouse import Mouse
 
 
 class AppGui(object):
-    _layout, _window = None, None
-    _event, _values = None, None
-
-    _file_paths = None
-
-    _class_id = 0
-    _file_currrent_index = 0
-
-    _DISPLAY_IMAGE_SIZE = (512, 512)
-    _graph_image_id = None
-    _graph_mask_id = None
-
-    MOUSE_EVENT_NONE = 0
-    MOUSE_EVENT_DRAG_START = 1
-    MOUSE_EVENT_DRAG = 2
-    MOUSE_EVENT_DRAG_END = 3
-    _mouse_drag_count = 0
-    _mouse_event = MOUSE_EVENT_NONE
-    _mouse_point = None
-
-    ROI_MODE = 0
-    GRABCUT_MODE = 1
-    mode = ROI_MODE
-
-    def __init__(self, file_paths):
-        self._file_paths = file_paths
-        file_list = [os.path.basename(file_path) for file_path in file_paths]
-
-        # Apply Theme
+    def __init__(self, file_paths: List[Path], image_size: Tuple[int, int]):
         sg.theme('DarkBlue')
-
-        frame_image = sg.Frame('',
-                               layout=[[
-                                   sg.Graph(
-                                       (512, 512),
-                                       (0, 0),
-                                       (512, 512),
-                                       change_submits=True,
-                                       drag_submits=True,
-                                       key='-IMAGE ORIGINAL-',
-                                   ),
-                                   sg.Graph(
-                                       (512, 512),
-                                       (0, 0),
-                                       (512, 512),
-                                       change_submits=True,
-                                       drag_submits=True,
-                                       key='-IMAGE MASK-',
-                                   ),
-                               ]],
-                               border_width=0)
-
-        frame_class_select = sg.Frame('Class',
-                                      layout=[[
-                                          sg.InputText(
-                                              '0',
-                                              enable_events=True,
-                                              key='-CLASS ID-'
-                                          )]],
-                                      border_width=1)
-
-        frame_main = sg.Frame(
-            '',
-            layout=[[frame_image], [frame_class_select],
-                    [
-                        sg.Spin(
-                            [format(i * 0.1, '.1f') for i in range(1, 10)],
-                            initial_value=0.7,
-                            key='-SPIN MASK ALPHA-',
-                            enable_events=True,
-                        ),
-                        sg.Text('Mask alpha    '),
-                        sg.Spin(
-                            [i for i in range(1, 10)],
-                            initial_value=5,
-                            key='-SPIN ITERATION-',
-                            enable_events=True,
-                        ),
-                        sg.Text('Iteration    '),
-                        sg.Spin(
-                            [i for i in range(1, 10)],
-                            initial_value=4,
-                            key='-SPIN DRAW THICKNESS-',
-                            enable_events=True,
-                        ),
-                        sg.Text('Draw thickness    '),
-                        sg.Spin(
-                            [i for i in [32, 64, 128, 256, 512, 1024]],
-                            initial_value=512,
-                            key='-SPIN OUTPUT WIDTH-',
-                            enable_events=True,
-                        ),
-                        sg.Text('Output width    '),
-                        sg.Spin(
-                            [i for i in [32, 64, 128, 256, 512, 1024]],
-                            initial_value=512,
-                            key='-SPIN OUTPUT HEIGHT-',
-                            enable_events=True,
-                        ),
-                        sg.Text('Output height      '),
-                        sg.Checkbox('Auto save     ',
-                                    enable_events=True,
-                                    key='-CHECKBOX AUTO SAVE-'),
-                        sg.Checkbox('Manually label background',
-                                    enable_events=True,
-                                    key='-CHECKBOX BACKGROUND-'),
-                    ]],
-            border_width=0)
-
-        self._layout = [
-            [
+        self.image_size = image_size
+        self.mouse = Mouse(image_size=self.image_size)
+        self.window = sg.Window(
+            title='GrabCut Annotation Tool',
+            layout=[[
                 sg.Listbox(
-                    file_list,
-                    size=(15, 50),
+                    values=[str(f.name) for f in file_paths],
+                    size=(15, 45),
                     bind_return_key=True,
                     enable_events=True,
                     key='-LISTBOX FILE-',
                 ),
-                frame_main,
+                sg.Frame(
+                    title='',
+                    layout=[
+                        [sg.Frame(
+                            title='',
+                            layout=[[
+                                sg.Graph(
+                                    canvas_size=image_size,
+                                    graph_bottom_left=(0, 0),
+                                    graph_top_right=image_size,
+                                    change_submits=True,
+                                    drag_submits=True,
+                                    key='-IMAGE ORIGINAL-',
+                                ),
+                                sg.Graph(
+                                    canvas_size=image_size,
+                                    graph_bottom_left=(0, 0),
+                                    graph_top_right=image_size,
+                                    change_submits=True,
+                                    drag_submits=True,
+                                    key='-IMAGE MASK-',
+                                )]],
+                            border_width=0)]],
+                    border_width=0)],
+                [sg.Checkbox(
+                    text='Mark Background',
+                    enable_events=True,
+                    key='-CHECKBOX BACKGROUND-'
+                )],
+                [sg.Button('Save')]
             ],
-        ]
-
-        # ウィンドウの生成
-        self._window = sg.Window(
-            'GrabCut Annotation Tool',
-            self._layout,
             size=(1220, 620),
             return_keyboard_events=True,
             finalize=True,
             location=(50, 50),
         )
 
-        # GUI初期設定
-        self._file_currrent_index = 0
+        self.window.Element('-LISTBOX FILE-').Update(set_to_index=0)
+        self.window['-CHECKBOX BACKGROUND-'].Update(value=True)
 
-        self._window['-CLASS ID-'].update(True)
-        self._window.Element('-LISTBOX FILE-').Update(
-            set_to_index=self._file_currrent_index)
-        self._window['-CHECKBOX BACKGROUND-'].Update(value=True)
+    def reset(self):
+        self.window['-CHECKBOX BACKGROUND-'].Update(value=True)
+        self.mouse.reset()
+        self.window.read(timeout=1)
 
-        self._event = None
-        self._values = None
-
-        self._class_id = 0
-
-    def legacy_get_window(self):
-        return self._window
-
-    def read_window(self, timeout=None):
-        self._event, self._values = self._window.read(timeout=timeout)
+    def read_window(self, timeout: Optional[int] = None) -> Tuple[str, Any]:
+        event, values = self.window.read(timeout=timeout)
         if timeout is None:
-            self._check_mouse_event(self._event, self._values)
-        return self._event, self._values
+            self.mouse.update(position=values['-IMAGE ORIGINAL-'], is_active=event == '-IMAGE ORIGINAL-')
+        return event, values
 
-    def _check_mouse_event(self, event, values):
-        if event == '-IMAGE ORIGINAL-':
-            if self._mouse_drag_count == 0:
-                self._mouse_event = self.MOUSE_EVENT_DRAG_START
-            else:
-                self._mouse_event = self.MOUSE_EVENT_DRAG
+    @staticmethod
+    def get_class_id() -> Optional[str]:
+        class_id = sg.popup_get_text(
+            message="Insert class id of masked object:",
+            title='Save mask',
+            default_text="",
+            size=(128, 256),
+            keep_on_top=True
+        )
+        return class_id
 
-            imaga_width = self._DISPLAY_IMAGE_SIZE[0]
-            imaga_height = self._DISPLAY_IMAGE_SIZE[1]
+    @property
+    def is_drawing_bg(self) -> bool:
+        return self.window['-CHECKBOX BACKGROUND-'].get()
 
-            moues_x = values['-IMAGE ORIGINAL-'][0]
-            moues_y = imaga_height - values['-IMAGE ORIGINAL-'][1]
-            if moues_x < 1:
-                moues_x = 1
-            if imaga_width < moues_x:
-                moues_x = imaga_width
-            if moues_y < 1:
-                moues_y = 1
-            if imaga_height < moues_y:
-                moues_y = imaga_height
-            self._mouse_point = (moues_x, moues_y)
+    @property
+    def file_index(self):
+        return self.window.Element('-LISTBOX FILE-').GetIndexes()[0]
 
-            self._mouse_drag_count += 1
-        else:
-            if self._mouse_drag_count > 0:
-                self._mouse_event = self.MOUSE_EVENT_DRAG_END
-                self._mouse_drag_count = 0
-            elif self._mouse_event == self.MOUSE_EVENT_DRAG_END:
-                self._mouse_event = self.MOUSE_EVENT_NONE
-                self._mouse_point = None
-
-    def read_mouse_event(self):
-        mouse_event = self._mouse_event
-        mouse_point = self._mouse_point
-
-        if self._mouse_event == self.MOUSE_EVENT_DRAG_END:
-            self._mouse_event = self.MOUSE_EVENT_NONE
-            self._mouse_point = None
-
-        return mouse_event, mouse_point
-
-    def load_config(self, config_file_name):
-        with open(config_file_name, mode='rt', encoding='utf-8') as file:
-            config_data = json.load(file)
-
-        self._window['-SPIN MASK ALPHA-'].Update(
-            value=config_data['MASK ALPHA'])
-        self._window['-SPIN ITERATION-'].Update(value=config_data['ITERATION'])
-        self._window['-SPIN DRAW THICKNESS-'].Update(
-            value=config_data['DRAW THICKNESS'])
-        self._window['-SPIN OUTPUT WIDTH-'].Update(
-            value=config_data['OUTPUT WIDTH'])
-        self._window['-SPIN OUTPUT HEIGHT-'].Update(
-            value=config_data['OUTPUT HEIGHT'])
-        if config_data['AUTO SAVE'] == 1:
-            self._window['-CHECKBOX AUTO SAVE-'].Update(value=True)
-        else:
-            self._window['-CHECKBOX AUTO SAVE-'].Update(value=False)
-        self._event, self._values = self._window.read(timeout=1)
-        return config_data
-
-    # GUIイベント取得
-    def get_window_event(self):
-        return self._event
-
-    # GUI値取得
-    def get_window_values(self):
-        return self._values
-
-    # 設定：クラスID
-    def get_setting_class_id(self):
-        return self._values['-CLASS ID-']
-
-    # 設定：GrabCut マスクα
-    def get_setting_mask_alpha(self):
-        return float(self._values['-SPIN MASK ALPHA-'])
-
-    # 設定：GrabCut イテレーション回数
-    def get_setting_iteration(self):
-        return int(self._values['-SPIN ITERATION-'])
-
-    # 設定：GrabCut 手動マスク描画線の太さ
-    def get_setting_draw_thickness(self):
-        return int(self._values['-SPIN DRAW THICKNESS-'])
-
-    # 設定：オートセーブ
-    def get_setting_auto_save(self):
-        return self._values['-CHECKBOX AUTO SAVE-']
-
-    # 設定：前景/後景指定
-    def get_setting_label_background(self):
-        return self._values['-CHECKBOX BACKGROUND-']
-
-    # 設定：前景/後景設定 設定
-    def set_setting_lable_background(self, flag):
-        self._window['-CHECKBOX BACKGROUND-'].Update(value=flag)
-        self._event, self._values = self._window.read(timeout=1)
-
-    # 設定：出力画像幅
-    def get_setting_output_width(self):
-        return self._values['-SPIN OUTPUT WIDTH-']
-
-    # 設定：出力画像高さ
-    def get_setting_output_height(self):
-        return self._values['-SPIN OUTPUT HEIGHT-']
-
-    # ファイルリストのインデックス取得
-    def get_file_list_current_index(self):
-        self._file_currrent_index = self._window.Element(
-            '-LISTBOX FILE-').GetIndexes()[0]
-        return self._file_currrent_index
-
-    # ファイルリストのインデックス設定
     def set_file_list_current_index(self, index, scroll=False):
-        self._file_currrent_index = index
-
-        if scroll:
-            self._window['-LISTBOX FILE-'].Update(
-                set_to_index=self._file_currrent_index,
-                scroll_to_index=self._file_currrent_index,
-            )
-
-    def get_listbox_size(self):
-        return len(self._file_paths)
-
-    def get_file_path_from_listbox(self, index):
-        return self._file_paths[index]
-
-    # 画像描画サイズ
-    def get_display_image_size(self):
-        return self._DISPLAY_IMAGE_SIZE
-
-    # 画像描画
-    def draw_image(self, image):
-        # バイト列へ変換
-        bytes_image = cv.imencode('.png', image)[1].tobytes()
-
-        imaga_height = self._DISPLAY_IMAGE_SIZE[1]
-
-        # 画面描画
-        if self._graph_image_id is not None:
-            self._window['-IMAGE ORIGINAL-'].delete_figure(
-                self._graph_image_id)
-        self._graph_image_id = self._window['-IMAGE ORIGINAL-'].draw_image(
-            data=bytes_image,
-            location=(0, imaga_height),
+        self.window['-LISTBOX FILE-'].Update(
+                set_to_index=index,
+                scroll_to_index=index if scroll else None,
         )
+        self.window.read(timeout=1)
 
-    # マスク画像描画
-    def draw_mask_image(self, mask_list):
-        # セマンティックセグメンテーション カラーパレット取得
-        color_palette = util.get_palette().flatten()
-        color_palette = color_palette.tolist()
+    @property
+    def listbox_size(self):
+        return len(self.window['-LISTBOX FILE-'].get_list_values())
 
-        # 各クラスを統合した画像を生成
-        debug_mask = copy.deepcopy(mask_list)
-        temp_mask = copy.deepcopy(mask_list)
-        debug_mask = np.where((temp_mask == 2) | (temp_mask == 0),
-                              debug_mask, 0).astype('uint8')
+    def get_from_listbox(self, index):
+        return self.window['-LISTBOX FILE-'].get_list_values()[index]
 
-        # バイト列へ変換
-        with Image.fromarray(debug_mask, mode="P") as png_image:
-            png_image.putpalette(color_palette)
-
-            bytes_image = io.BytesIO()
-            png_image.save(bytes_image, format='PNG')
-            bytes_image = bytes_image.getvalue()
-
-        imaga_height = self._DISPLAY_IMAGE_SIZE[1]
-
-        # 画面描画
-        if self._graph_mask_id is not None:
-            self._window['-IMAGE MASK-'].delete_figure(self._graph_mask_id)
-        self._graph_mask_id = self._window['-IMAGE MASK-'].draw_image(
-            data=bytes_image,
-            location=(0, imaga_height),
-        )
+    def draw(self, data: np.ndarray, is_mask: bool = False):
+        graph = self.window['-IMAGE MASK-'] if is_mask else self.window['-IMAGE ORIGINAL-']
+        graph.erase()
+        graph.draw_image(data=cv2.imencode('.png', data)[1].tobytes(), location=(0, self.image_size[1]))
 
     def __del__(self):
-        self._window.close()
+        self.window.close()
