@@ -133,3 +133,7 @@ dmypy.json
 
 # PyCharm
 .idea/
+
+# Generated
+output/annotation/*.png
+output/image/*.png

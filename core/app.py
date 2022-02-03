@@ -23,7 +23,8 @@ class GrabCutApp:
         self.gui = AppGui(file_paths=self.files, image_size=self.IMAGE_SIZE)
         self.image_out = image_out
         self.annotation_out = annotation_out
-        self.image = cv2.resize(cv2.imread(str(self.filename)), self.IMAGE_SIZE)
+        self.original_image = cv2.imread(str(self.filename))
+        self.image = cv2.resize(deepcopy(self.original_image), self.IMAGE_SIZE)
         self.debug_image = deepcopy(self.image)
         self.mask = np.zeros(self.image.shape[:2], dtype=np.uint8)
         self.grabcut_mask = None
@@ -42,7 +43,8 @@ class GrabCutApp:
         return self.gui.is_drawing_bg
 
     def reset(self):
-        self.image = cv2.resize(cv2.imread(str(self.filename)), self.IMAGE_SIZE)
+        self.original_image = cv2.imread(str(self.filename))
+        self.image = cv2.resize(deepcopy(self.original_image), self.IMAGE_SIZE)
         self.mask = np.zeros(self.image.shape[:2], dtype=np.uint8)
         self.reset_debug_image()
         self.reset_grabcut()
@@ -191,5 +193,6 @@ class GrabCutApp:
     def save(self):
         class_id = self.gui.get_class_id()
         if class_id:
-            cv2.imwrite(str(self.image_out.joinpath(f'{self.filename.stem}_{class_id}.png')), self.image)
-            cv2.imwrite(str(self.annotation_out.joinpath(f'{self.filename.stem}_{class_id}_mask.png')), self.mask)
+            resized_mask = cv2.resize(deepcopy(self.mask), (self.original_image.shape[1], self.original_image.shape[0]))
+            cv2.imwrite(str(self.image_out.joinpath(f'{self.filename.stem}_{class_id}.png')), self.original_image)
+            cv2.imwrite(str(self.annotation_out.joinpath(f'{self.filename.stem}_{class_id}_mask.png')), resized_mask)
